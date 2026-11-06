@@ -1,0 +1,92 @@
+name: Publish network-split to ECR Public
+
+# Plain LibreWXR image from this fork's network-split branch. pirate-weather-code's
+# build.yml publishes its pipeline image (this plus the nowcast export hook) to the
+# same repository as dev and release, so never use those tags here.
+
+on:
+  push:
+    branches: [network-split]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ecr-publish
+  cancel-in-progress: true
+
+env:
+  IMAGE: public.ecr.aws/j9v4j3c7/pirate-librewxr
+  TAG: network-split
+
+jobs:
+  resolve:
+    if: github.repository == 'Pirate-Weather/LibreWXR'
+    runs-on: ubuntu-24.04
+    outputs:
+      sha: ${{ steps.commit.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: network-split
+
+      - id: commit
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: resolve
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: 45
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runs-on: ubuntu-24.04
+          - arch: arm64
+            runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1 # ECR Public login only works here
+
+      - uses: aws-actions/amazon-ecr-login@v2
+        with:
+          registry-type: public
+
+      - name: Build and push
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          docker build -t "$IMAGE:$TAG-$ARCH" .
+          docker push "$IMAGE:$TAG-$ARCH"
+
+  manifest:
+    needs: [resolve, build]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - uses: aws-actions/amazon-ecr-login@v2
+        with:
+          registry-type: public
+
+      - name: Create multi-arch tags
+        env:
+          SHA: ${{ needs.resolve.outputs.sha }}
+        run: |
+          docker buildx imagetools create \
+            -t "$IMAGE:$TAG" \
+            -t "$IMAGE:$TAG-${SHA::7}" \
+            "$IMAGE:$TAG-amd64" \
+            "$IMAGE:$TAG-arm64"
