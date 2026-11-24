@@ -1,0 +1,30 @@
+name: Trigger the Pirate Weather LibreWXR image build
+
+# The fork's image (pirate-librewxr:dev, for the pipeline, renderers and
+# puller) is built by Pirate-Weather/pirate-weather-code's build.yml, since it
+# adds that repository's nowcast hook. This asks for that build when main
+# changes; it rebuilds only the LibreWXR image there.
+#
+# Needs the PIRATE_WEATHER_DISPATCH_TOKEN secret: a fine-grained token with
+# Contents read and write on Pirate-Weather/pirate-weather-code.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch:
+    if: github.repository == 'Pirate-Weather/LibreWXR'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Send repository_dispatch to pirate-weather-code
+        env:
+          GH_TOKEN: ${{ secrets.PIRATE_WEATHER_DISPATCH_TOKEN }}
+        run: |
+          gh api repos/Pirate-Weather/pirate-weather-code/dispatches \
+            -f event_type=librewxr-main \
+            -f "client_payload[sha]=$GITHUB_SHA"
